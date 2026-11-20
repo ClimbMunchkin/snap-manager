@@ -1,0 +1,646 @@
+#!/usr/bin/env python3
+# snap-manager.py — элегантный менеджер блокировок Snap (Python-порт)
+
+import os
+import sys
+import re
+import subprocess
+import time
+from datetime import datetime
+
+from PyQt5.QtWidgets import (
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+    QListWidget, QListWidgetItem, QPushButton, QMessageBox,
+    QProgressDialog, QTextEdit, QComboBox, QAbstractItemView,
+    QToolBar, QAction, QStatusBar, QFrame, QMenu, QWidget,
+    QSizePolicy, QShortcut
+)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt5.QtGui import QFont, QIcon, QKeySequence, QColor, QBrush
+
+LOG_DIR = "/var/log/snap-update-manager"
+
+SYSTEM_SNAPS_RE = re.compile(
+    r"^(bare|core.*|snapd.*|gnome-.*|mesa-.*|gtk.*|webkitgtk.*|firmware-updater)$"
+)
+
+TITLE_BASE = "Управление обновлениями Snap"
+
+
+# ---------- Утилиты ----------
+def run(cmd, check=False):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, check=check)
+        return p.returncode, p.stdout.strip(), p.stderr.strip()
+    except FileNotFoundError:
+        return 127, "", f"Команда не найдена: {cmd[0]}"
+    except Exception as e:
+        return 1, "", str(e)
+
+
+def require_root():
+    if os.geteuid() != 0:
+        app = QApplication.instance() or QApplication(sys.argv)
+        QMessageBox.critical(None, "Ошибка", "Требуются права root. Запустите через sudo.")
+        sys.exit(1)
+
+
+def get_snapd_version():
+    rc, out, _ = run(["snap", "version"])
+    if rc != 0:
+        return "unknown"
+    for line in out.splitlines():
+        if line.startswith("snapd"):
+            parts = line.split()
+            if len(parts) >= 2:
+                return parts[1]
+    return "unknown"
+
+
+def check_snapd_version(ver):
+    m = re.match(r"^(\d+)\.(\d+)", ver)
+    if not m:
+        return False
+    return (int(m.group(1)), int(m.group(2))) >= (2, 58)
+
+
+def cleanup_old_logs():
+    if not os.path.isdir(LOG_DIR):
+        return
+    now = time.time()
+    for f in os.listdir(LOG_DIR):
+        if not f.endswith(".log"):
+            continue
+        path = os.path.join(LOG_DIR, f)
+        try:
+            if now - os.path.getmtime(path) > 30 * 86400:
+                os.remove(path)
+        except OSError:
+            pass
+
+
+def get_snap_statuses():
+    rc, out, _ = run(["snap", "list"])
+    if rc != 0:
+        return {}
+    statuses = {}
+    for line in out.splitlines()[1:]:
+        parts = line.split()
+        if not parts:
+            continue
+        pkg = parts[0]
+        statuses[pkg] = "held" if "held" in parts[-1] else "active"
+    return statuses
+
+
+def is_global_held():
+    rc, out, _ = run(["snap", "refresh", "--time"])
+    if rc != 0:
+        return False
+    return bool(re.search(r"^hold:\s*(forever|\d)", out, re.MULTILINE))
+
+
+# ---------- Фоновый обновитель ----------
+class UpdateWorker(QThread):
+    progress = pyqtSignal(int, str)
+    log_line = pyqtSignal(str)
+    ask_question = pyqtSignal(str, str)
+    finished = pyqtSignal(int, int, str)
+
+    def __init__(self, packages, master_log):
+        super().__init__()
+        self.packages = packages
+        self.master_log = master_log
+        self._answer = None
+        self._answer_ready = False
+
+    def _ask(self, pkg, text):
+        from PyQt5.QtCore import QEventLoop
+        loop = QEventLoop()
+        self._answer_ready = False
+        self._answer = None
+        self.ask_question.emit(pkg, text)
+        while not self._answer_ready:
+            QApplication.processEvents()
+            loop.processEvents()
+        return self._answer
+
+    def set_answer(self, ans):
+        self._answer = ans
+        self._answer_ready = True
+
+    def run(self):
+        total = len(self.packages)
+        updated = 0
+        error_msgs = ""
+        with open(self.master_log, "a", encoding="utf-8") as mlog:
+            mlog.write(f"=== Начало обновления: {datetime.now()} ===\n")
+            mlog.write(f"Выбранные пакеты: {' '.join(self.packages)}\n")
+            mlog.write("-" * 40 + "\n")
+
+            for i, pkg in enumerate(self.packages, 1):
+                percent = int(i * 100 / total)
+                self.progress.emit(percent, f"Проверка {pkg} ({i} из {total})...")
+
+                rc, _, _ = run(["pgrep", "-f", pkg])
+                if rc == 0:
+                    ans = self._ask(
+                        pkg,
+                        f"Обнаружен запущенный процесс, связанный с '{pkg}'.\n"
+                        f"Он может помешать обновлению.\n\n"
+                        f"Закрыть все связанные процессы принудительно?"
+                    )
+                    if ans:
+                        run(["pkill", "-f", pkg])
+                        time.sleep(1)
+                    else:
+                        error_msgs += f"[Пропущено] {pkg}: приложение запущено.\n"
+                        mlog.write(f"[Пропущено] {pkg}: приложение запущено.\n")
+                        self.log_line.emit(f"[Пропущено] {pkg}")
+                        continue
+
+                self.progress.emit(percent, f"Обновление {pkg}...")
+                rc, out, err = run(["snap", "refresh", pkg])
+                if rc == 0:
+                    updated += 1
+                    mlog.write(f"[УСПЕХ] {pkg} обновлен.\n{out}\n\n")
+                    self.log_line.emit(f"[УСПЕХ] {pkg}")
+                else:
+                    detail = (err or out).splitlines()[-5:]
+                    error_msgs += f"[Ошибка] {pkg}: {' '.join(detail)}\n"
+                    mlog.write(f"[ОШИБКА] {pkg} не обновлен.\n{out}\n{err}\n")
+                    mlog.write("-" * 40 + "\n")
+                    self.log_line.emit(f"[ОШИБКА] {pkg}")
+
+            mlog.write(f"=== Завершено: {datetime.now()} ===\n")
+            mlog.write(f"Успешно обновлено: {updated} из {total}\n")
+
+        self.progress.emit(100, "Готово!")
+        self.finished.emit(updated, total, error_msgs)
+
+
+# ---------- Стили ----------
+STYLE = """
+QDialog { background: #f7f8fa; }
+
+QLabel#headerTitle {
+    font-size: 15pt; font-weight: 600; color: #1a1a1a;
+}
+QLabel#headerStatus {
+    font-size: 10pt; color: #555; padding: 4px 0;
+}
+QLabel#headerStatus[held="true"] { color: #c0392b; font-weight: 600; }
+QLabel#headerStatus[held="false"] { color: #27ae60; font-weight: 600; }
+
+QFrame#card {
+    background: #ffffff;
+    border: 1px solid #e3e6ea;
+    border-radius: 10px;
+}
+
+QListWidget {
+    background: #ffffff;
+    border: 1px solid #e3e6ea;
+    border-radius: 10px;
+    padding: 6px;
+    font-size: 10.5pt;
+}
+QListWidget::item {
+    padding: 8px 6px;
+    border-radius: 6px;
+}
+QListWidget::item:selected {
+    background: #e8f0fe;
+    color: #1a1a1a;
+}
+QListWidget::item:hover {
+    background: #f2f5f9;
+}
+
+QPushButton {
+    background: #ffffff;
+    border: 1px solid #d0d4da;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 10pt;
+    color: #1a1a1a;
+}
+QPushButton:hover { background: #f2f5f9; border-color: #b9bec6; }
+QPushButton:pressed { background: #e6eaef; }
+QPushButton:disabled { color: #a0a0a0; border-color: #e3e6ea; }
+
+QPushButton#primary {
+    background: #2d6cdf; color: #ffffff; border: none;
+    font-weight: 600;
+}
+QPushButton#primary:hover { background: #2459b8; }
+QPushButton#primary:pressed { background: #1e4a99; }
+QPushButton#primary:disabled { background: #a9bce0; color: #f0f0f0; }
+
+QPushButton#danger {
+    background: #ffffff; color: #c0392b; border: 1px solid #e5b9b3;
+}
+QPushButton#danger:hover { background: #fdf0ee; }
+
+QComboBox {
+    background: #ffffff;
+    border: 1px solid #d0d4da;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 10pt;
+    min-width: 180px;
+}
+QComboBox:hover { border-color: #b9bec6; }
+QComboBox::drop-down { border: none; width: 24px; }
+QComboBox QAbstractItemView {
+    border: 1px solid #e3e6ea; border-radius: 8px;
+    background: #ffffff; selection-background-color: #e8f0fe;
+    selection-color: #1a1a1a; padding: 4px;
+}
+
+QToolBar {
+    background: transparent; border: none; spacing: 4px;
+}
+QToolBar QToolButton {
+    background: transparent; border: 1px solid transparent;
+    border-radius: 6px; padding: 6px 10px; font-size: 10pt;
+}
+QToolBar QToolButton:hover { background: #eef1f5; border-color: #e3e6ea; }
+
+QStatusBar { background: #ffffff; border-top: 1px solid #e3e6ea; font-size: 9.5pt; color: #555; }
+"""
+
+
+# ---------- Главное окно ----------
+class SnapManager(QDialog):
+    def __init__(self, snapd_ver):
+        super().__init__()
+        self.snapd_ver = snapd_ver
+        self.setWindowTitle(f"{TITLE_BASE} (v{snapd_ver})")
+        self.resize(720, 780)
+        self.setStyleSheet(STYLE)
+
+        self.initial_status = {}
+        self.pkg_display = {}
+        self.is_system = {}
+        self.current_checked = set()
+
+        self._build_ui()
+        self._load_data()
+
+    # --- UI ---
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 16, 18, 12)
+        root.setSpacing(12)
+
+        # --- Шапка ---
+        header = QVBoxLayout()
+        header.setSpacing(2)
+        title = QLabel("Snap-пакеты")
+        title.setObjectName("headerTitle")
+        self.global_label = QLabel()
+        self.global_label.setObjectName("headerStatus")
+        header.addWidget(title)
+        header.addWidget(self.global_label)
+        root.addLayout(header)
+
+        # --- Панель инструментов ---
+        toolbar = QToolBar()
+        toolbar.setIconSize(QSize(16, 16))
+
+        self.act_check_all = QAction("✅ Выделить все", self)
+        self.act_uncheck_all = QAction("⬜ Снять все", self)
+        self.act_check_all.triggered.connect(self.select_all)
+        self.act_uncheck_all.triggered.connect(self.select_none)
+        toolbar.addAction(self.act_check_all)
+        toolbar.addAction(self.act_uncheck_all)
+
+        sep = QWidget()
+        sep.setFixedWidth(8)
+        toolbar.addWidget(sep)
+
+        self.act_global_hold = QAction("🌐 Приостановить всё", self)
+        self.act_global_unhold = QAction("🌐 Возобновить всё", self)
+        self.act_global_hold.triggered.connect(self.on_global_hold)
+        self.act_global_unhold.triggered.connect(self.on_global_unhold)
+        toolbar.addAction(self.act_global_hold)
+        toolbar.addAction(self.act_global_unhold)
+
+        # растяжка
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        toolbar.addWidget(spacer)
+
+        toolbar.addWidget(QLabel("Сортировка:"))
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItems(["Сначала системные", "По имени (А-Я)", "Сначала заблокированные"])
+        self.sort_combo.currentIndexChanged.connect(self._rebuild_list)
+        toolbar.addWidget(self.sort_combo)
+
+        root.addWidget(toolbar)
+
+        # --- Список ---
+        self.list_widget = QListWidget()
+        self.list_widget.setSelectionMode(QAbstractItemView.NoSelection)
+        self.list_widget.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self._show_context_menu)
+        self.list_widget.itemChanged.connect(self._on_item_changed)
+        root.addWidget(self.list_widget, 1)
+
+        # --- Нижняя панель действий ---
+        bottom = QHBoxLayout()
+        bottom.setSpacing(10)
+
+        self.btn_apply = QPushButton("💾 Применить")
+        self.btn_apply.setObjectName("primary")
+        self.btn_apply.clicked.connect(self.on_apply)
+
+        self.btn_update = QPushButton("🔄 Обновить выбранные")
+        self.btn_update.clicked.connect(self.on_update_selected)
+
+        self.btn_cancel = QPushButton("Закрыть")
+        self.btn_cancel.clicked.connect(self.reject)
+
+        bottom.addWidget(self.btn_apply)
+        bottom.addWidget(self.btn_update)
+        bottom.addStretch()
+        bottom.addWidget(self.btn_cancel)
+        root.addLayout(bottom)
+
+        # --- Статус-бар (имитация через QLabel) ---
+        self.status = QLabel()
+        self.status.setObjectName("headerStatus")
+        self.status.setStyleSheet("font-size: 9pt; color: #777;")
+        root.addWidget(self.status)
+
+        # Горячие клавиши
+        QShortcut(QKeySequence("Ctrl+A"), self, activated=self.select_all)
+        QShortcut(QKeySequence("Ctrl+D"), self, activated=self.select_none)
+        QShortcut(QKeySequence("Return"), self, activated=self.on_apply)
+
+    # --- Данные ---
+    def _load_data(self):
+        # очищаем — важно, чтобы не тащить старые множества
+        self.initial_status.clear()
+        self.pkg_display.clear()
+        self.is_system.clear()
+        self.current_checked.clear()
+
+        statuses = get_snap_statuses()
+        for pkg, st in statuses.items():
+            self.initial_status[pkg] = 1 if st == "held" else 0
+            if SYSTEM_SNAPS_RE.match(pkg):
+                self.pkg_display[pkg] = f"⚠️  {pkg}"
+                self.is_system[pkg] = 1
+            else:
+                self.pkg_display[pkg] = pkg
+                self.is_system[pkg] = 0
+            if self.initial_status[pkg] == 1:
+                self.current_checked.add(pkg)
+
+        held_globally = is_global_held()
+        if held_globally:
+            self.global_label.setText("🔴 Обновления приостановлены глобально")
+        else:
+            self.global_label.setText("🟢 Обновления активны (фон)")
+        self.global_label.setProperty("held", "true" if held_globally else "false")
+        self.global_label.style().unpolish(self.global_label)
+        self.global_label.style().polish(self.global_label)
+
+        self._rebuild_list()
+        self._update_status()
+
+    def _sorted_packages(self):
+        mode = self.sort_combo.currentText()
+        pkgs = list(self.initial_status.keys())
+        if mode == "По имени (А-Я)":
+            return sorted(pkgs)
+        if mode == "Сначала заблокированные":
+            return sorted(pkgs, key=lambda p: (-self.initial_status[p], p))
+        return sorted(pkgs, key=lambda p: (-self.is_system[p], p))
+
+    def _rebuild_list(self):
+        # блокируем сигнал на время перестройки — чтобы не дёргать _on_item_changed
+        self.list_widget.blockSignals(True)
+        self.list_widget.clear()
+        for pkg in self._sorted_packages():
+            item = QListWidgetItem(self.pkg_display[pkg])
+            item.setData(Qt.UserRole, pkg)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if pkg in self.current_checked else Qt.Unchecked)
+            # системные — лёгкий серый фон и подсказка
+            if self.is_system[pkg]:
+                item.setToolTip("Системный компонент — блокировать не рекомендуется")
+                item.setForeground(QBrush(QColor("#555555")))
+            if self.initial_status[pkg]:
+                item.setToolTip((item.toolTip() + "\n" if item.toolTip() else "")
+                                + "Сейчас заблокирован (--hold)")
+            self.list_widget.addItem(item)
+        self.list_widget.blockSignals(False)
+
+    def _on_item_changed(self, item):
+        pkg = item.data(Qt.UserRole)
+        if item.checkState() == Qt.Checked:
+            self.current_checked.add(pkg)
+        else:
+            self.current_checked.discard(pkg)
+        self._update_status()
+
+    def _update_status(self):
+        total = len(self.initial_status)
+        checked = len(self.current_checked)
+        held = sum(1 for v in self.initial_status.values() if v == 1)
+        self.status.setText(
+            f"Всего: {total}   •   Отмечено: {checked}   •   Заблокировано сейчас: {held}"
+        )
+
+    def _show_context_menu(self, pos):
+        item = self.list_widget.itemAt(pos)
+        if not item:
+            return
+        pkg = item.data(Qt.UserRole)
+        menu = QMenu(self)
+        act_check = menu.addAction("✅ Выделить")
+        act_uncheck = menu.addAction("⬜ Снять")
+        menu.addSeparator()
+        act_toggle = menu.addAction("🔒 Переключить блокировку (без применения)")
+        chosen = menu.exec_(self.list_widget.mapToGlobal(pos))
+        if chosen == act_check:
+            item.setCheckState(Qt.Checked)
+        elif chosen == act_uncheck:
+            item.setCheckState(Qt.Unchecked)
+        elif chosen == act_toggle:
+            # программно переключаем галочку
+            item.setCheckState(
+                Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
+            )
+
+    # --- Массовые операции ---
+    def select_all(self):
+        self.list_widget.blockSignals(True)
+        for i in range(self.list_widget.count()):
+            it = self.list_widget.item(i)
+            it.setCheckState(Qt.Checked)
+            self.current_checked.add(it.data(Qt.UserRole))
+        self.list_widget.blockSignals(False)
+        self._update_status()
+
+    def select_none(self):
+        self.list_widget.blockSignals(True)
+        for i in range(self.list_widget.count()):
+            it = self.list_widget.item(i)
+            it.setCheckState(Qt.Unchecked)
+        self.list_widget.blockSignals(False)
+        self.current_checked.clear()
+        self._update_status()
+
+    # --- Глобальные действия ---
+    def on_global_hold(self):
+        rc, _, _ = run(["snap", "refresh", "--hold"])
+        if rc == 0:
+            QMessageBox.information(
+                self, self.windowTitle(),
+                "✅ Глобальная блокировка включена.\n\n"
+                "Все Snap-пакеты больше не будут обновляться автоматически."
+            )
+        else:
+            QMessageBox.critical(self, self.windowTitle(), "❌ Ошибка при глобальной блокировке.")
+        self._load_data()
+
+    def on_global_unhold(self):
+        rc, _, _ = run(["snap", "refresh", "--unhold"])
+        if rc == 0:
+            QMessageBox.information(
+                self, self.windowTitle(),
+                "✅ Глобальная блокировка снята.\n\n"
+                "Автоматические обновления всех Snap-пакетов снова активны."
+            )
+        else:
+            QMessageBox.critical(self, self.windowTitle(), "❌ Ошибка при снятии глобальной блокировки.")
+        self._load_data()
+
+    # --- Обычная блокировка ---
+    def on_apply(self):
+        held = unheld = 0
+        errors = ""
+        for pkg, init in self.initial_status.items():
+            curr = 1 if pkg in self.current_checked else 0
+            if init == 0 and curr == 1:
+                rc, _, _ = run(["snap", "refresh", "--hold", pkg])
+                if rc == 0: held += 1
+                else: errors += f"Ошибка при блокировке {pkg}\n"
+            elif init == 1 and curr == 0:
+                rc, _, _ = run(["snap", "refresh", "--unhold", pkg])
+                if rc == 0: unheld += 1
+                else: errors += f"Ошибка при разблокировке {pkg}\n"
+
+        if errors:
+            QMessageBox.warning(
+                self, "Готово, но были ошибки",
+                f"🔒 Заблокировано: {held}\n🔓 Разблокировано: {unheld}\n\n{errors}"
+            )
+        elif held == 0 and unheld == 0:
+            QMessageBox.information(self, "Без изменений",
+                                    "Изменений нет.\nВсе галочки остались на своих местах.")
+        else:
+            QMessageBox.information(
+                self, "Готово",
+                f"🔒 Заблокировано: {held}\n🔓 Разблокировано: {unheld}"
+            )
+        self._load_data()
+
+    # --- Разовое обновление ---
+    def on_update_selected(self):
+        to_update = list(self.current_checked)
+        if not to_update:
+            QMessageBox.information(self, "Нет выбора",
+                                    "Не выбрано ни одного пакета для обновления.")
+            return
+
+        os.makedirs(LOG_DIR, exist_ok=True)
+        master_log = os.path.join(
+            LOG_DIR, f"update-{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        )
+
+        self.progress_dlg = QProgressDialog("Подготовка...", None, 0, 100, self)
+        self.progress_dlg.setWindowTitle(self.windowTitle())
+        self.progress_dlg.setWindowModality(Qt.WindowModal)
+        self.progress_dlg.setMinimumDuration(0)
+        self.progress_dlg.setCancelButton(None)
+        self.progress_dlg.setValue(0)
+
+        self.worker = UpdateWorker(to_update, master_log)
+        self.worker.progress.connect(self._on_progress)
+        self.worker.ask_question.connect(self._on_ask)
+        self.worker.finished.connect(self._on_update_finished)
+        self.worker.start()
+
+    def _on_progress(self, percent, msg):
+        if getattr(self, "progress_dlg", None):
+            self.progress_dlg.setValue(percent)
+            self.progress_dlg.setLabelText(msg)
+
+    def _on_ask(self, pkg, text):
+        ans = QMessageBox.question(
+            self, "Приложение запущено", text,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        ) == QMessageBox.Yes
+        if getattr(self, "worker", None):
+            self.worker.set_answer(ans)
+
+    def _on_update_finished(self, updated, total, errors):
+        if getattr(self, "progress_dlg", None):
+            self.progress_dlg.close()
+            self.progress_dlg = None
+
+        master_log = self.worker.master_log
+        if errors:
+            text = (
+                f"Готово!\n\nУспешно обновлено: {updated}\n\n"
+                f"Ошибки:\n{errors}\n\nПолный лог сохранен в:\n{master_log}"
+            )
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Результат обновления")
+            dlg.resize(640, 420)
+            lay = QVBoxLayout(dlg)
+            te = QTextEdit()
+            te.setReadOnly(True)
+            te.setPlainText(text)
+            lay.addWidget(te)
+            close_btn = QPushButton("Закрыть")
+            close_btn.clicked.connect(dlg.accept)
+            lay.addWidget(close_btn, alignment=Qt.AlignRight)
+            dlg.exec_()
+        else:
+            QMessageBox.information(
+                self, "Результат обновления",
+                f"Успешно обновлено пакетов: {updated}\n\n"
+                f"Полный лог сохранен в:\n{master_log}"
+            )
+        self._load_data()
+
+
+# ---------- main ----------
+def main():
+    require_root()
+    cleanup_old_logs()
+
+    snapd_ver = get_snapd_version()
+    if not check_snapd_version(snapd_ver):
+        app = QApplication.instance() or QApplication(sys.argv)
+        QMessageBox.critical(
+            None, "Версия не поддерживается",
+            f"Текущая версия snapd ({snapd_ver}) ниже минимально требуемой 2.58.\n\n"
+            f"Функция --hold недоступна, скрипт не может продолжить работу.\n\n"
+            f"Пожалуйста, сначала обновите snapd:\n  sudo snap refresh snapd"
+        )
+        sys.exit(1)
+
+    app = QApplication(sys.argv)
+    dlg = SnapManager(snapd_ver)
+    dlg.exec_()
+
+
+if __name__ == "__main__":
+    main()
