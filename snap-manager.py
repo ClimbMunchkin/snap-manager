@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QPushButton, QMessageBox,
     QProgressDialog, QTextEdit, QComboBox, QAbstractItemView,
     QToolBar, QAction, QStatusBar, QFrame, QMenu, QWidget,
-    QSizePolicy, QShortcut
+    QSizePolicy, QShortcut, QMenuBar
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QFont, QIcon, QKeySequence, QColor, QBrush
@@ -268,6 +268,34 @@ QToolBar QToolButton {
 QToolBar QToolButton:hover { background: #eef1f5; border-color: #e3e6ea; }
 
 QStatusBar { background: #ffffff; border-top: 1px solid #e3e6ea; font-size: 9.5pt; color: #555; }
+
+QMenuBar {
+    background: #ffffff;
+    border-bottom: 1px solid #e3e6ea;
+    font-size: 10pt;
+}
+QMenuBar::item {
+    background: transparent;
+    padding: 6px 12px;
+    border-radius: 4px;
+}
+QMenuBar::item:selected { background: #eef1f5; }
+QMenu {
+    background: #ffffff;
+    border: 1px solid #e3e6ea;
+    border-radius: 8px;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 24px;
+    border-radius: 4px;
+}
+QMenu::item:selected { background: #e8f0fe; }
+QMenu::separator {
+    height: 1px;
+    background: #e3e6ea;
+    margin: 4px 8px;
+}
 """
 
 
@@ -309,6 +337,7 @@ class SnapManager(QDialog):
         toolbar = QToolBar()
         toolbar.setIconSize(QSize(16, 16))
 
+        # Оставляем только кнопки массового выделения
         self.act_check_all = QAction("✅ Выделить все", self)
         self.act_uncheck_all = QAction("⬜ Снять все", self)
         self.act_check_all.triggered.connect(self.select_all)
@@ -316,16 +345,7 @@ class SnapManager(QDialog):
         toolbar.addAction(self.act_check_all)
         toolbar.addAction(self.act_uncheck_all)
 
-        sep = QWidget()
-        sep.setFixedWidth(8)
-        toolbar.addWidget(sep)
-
-        self.act_global_hold = QAction("🌐 Приостановить всё", self)
-        self.act_global_unhold = QAction("🌐 Возобновить всё", self)
-        self.act_global_hold.triggered.connect(self.on_global_hold)
-        self.act_global_unhold.triggered.connect(self.on_global_unhold)
-        toolbar.addAction(self.act_global_hold)
-        toolbar.addAction(self.act_global_unhold)
+        # Убраны глобальные кнопки Приостановить/Возобновить
 
         # растяжка
         spacer = QWidget()
@@ -348,7 +368,7 @@ class SnapManager(QDialog):
         self.list_widget.itemChanged.connect(self._on_item_changed)
         root.addWidget(self.list_widget, 1)
 
-        # --- Нижняя панель действий ---
+        # --- Нижняя панель действий (Кнопка Закрыть удалена) ---
         bottom = QHBoxLayout()
         bottom.setSpacing(10)
 
@@ -359,13 +379,9 @@ class SnapManager(QDialog):
         self.btn_update = QPushButton("🔄 Обновить выбранные")
         self.btn_update.clicked.connect(self.on_update_selected)
 
-        self.btn_cancel = QPushButton("Закрыть")
-        self.btn_cancel.clicked.connect(self.reject)
-
         bottom.addWidget(self.btn_apply)
         bottom.addWidget(self.btn_update)
-        bottom.addStretch()
-        bottom.addWidget(self.btn_cancel)
+        bottom.addStretch() # растягиваем, чтобы кнопки были слева
         root.addLayout(bottom)
 
         # --- Статус-бар (имитация через QLabel) ---
@@ -373,6 +389,29 @@ class SnapManager(QDialog):
         self.status.setObjectName("headerStatus")
         self.status.setStyleSheet("font-size: 9pt; color: #777;")
         root.addWidget(self.status)
+
+        # --- Верхнее меню (Menu Bar) ---
+        menubar = QMenuBar(self)
+        snap_menu = menubar.addMenu("Управление Snap")
+        
+        act_hold = QAction("🌐 Приостановить все обновления", self)
+        act_hold.setShortcut(QKeySequence("Ctrl+Shift+H"))
+        act_hold.triggered.connect(self.on_global_hold)
+        snap_menu.addAction(act_hold)
+        
+        act_unhold = QAction("🌐 Возобновить все обновления", self)
+        act_unhold.setShortcut(QKeySequence("Ctrl+Shift+U"))
+        act_unhold.triggered.connect(self.on_global_unhold)
+        snap_menu.addAction(act_unhold)
+        
+        snap_menu.addSeparator()
+        
+        act_quit = QAction("Выход", self)
+        act_quit.setShortcut(QKeySequence("Ctrl+Q"))
+        act_quit.triggered.connect(self.reject)
+        snap_menu.addAction(act_quit)
+        
+        root.setMenuBar(menubar)
 
         # Горячие клавиши
         QShortcut(QKeySequence("Ctrl+A"), self, activated=self.select_all)
