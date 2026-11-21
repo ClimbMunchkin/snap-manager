@@ -12,11 +12,10 @@ from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QPushButton, QMessageBox,
     QProgressDialog, QTextEdit, QComboBox, QAbstractItemView,
-    QToolBar, QAction, QStatusBar, QFrame, QMenu, QWidget,
-    QSizePolicy, QShortcut, QMenuBar
+    QAction, QFrame, QMenu, QWidget, QSizePolicy, QShortcut, QMenuBar
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
-from PyQt5.QtGui import QFont, QIcon, QKeySequence, QColor, QBrush
+from PyQt5.QtGui import QKeySequence, QColor, QBrush
 
 LOG_DIR = "/var/log/snap-update-manager"
 
@@ -237,11 +236,6 @@ QPushButton#primary:hover { background: #2459b8; }
 QPushButton#primary:pressed { background: #1e4a99; }
 QPushButton#primary:disabled { background: #a9bce0; color: #f0f0f0; }
 
-QPushButton#danger {
-    background: #ffffff; color: #c0392b; border: 1px solid #e5b9b3;
-}
-QPushButton#danger:hover { background: #fdf0ee; }
-
 QComboBox {
     background: #ffffff;
     border: 1px solid #d0d4da;
@@ -257,17 +251,6 @@ QComboBox QAbstractItemView {
     background: #ffffff; selection-background-color: #e8f0fe;
     selection-color: #1a1a1a; padding: 4px;
 }
-
-QToolBar {
-    background: transparent; border: none; spacing: 4px;
-}
-QToolBar QToolButton {
-    background: transparent; border: 1px solid transparent;
-    border-radius: 6px; padding: 6px 10px; font-size: 10pt;
-}
-QToolBar QToolButton:hover { background: #eef1f5; border-color: #e3e6ea; }
-
-QStatusBar { background: #ffffff; border-top: 1px solid #e3e6ea; font-size: 9.5pt; color: #555; }
 
 QMenuBar {
     background: #ffffff;
@@ -323,6 +306,7 @@ class SnapManager(QDialog):
         root.setSpacing(12)
 
         # --- Шапка ---
+        
         header = QVBoxLayout()
         header.setSpacing(2)
         title = QLabel("Snap-пакеты")
@@ -333,32 +317,15 @@ class SnapManager(QDialog):
         header.addWidget(self.global_label)
         root.addLayout(header)
 
-        # --- Панель инструментов ---
-        toolbar = QToolBar()
-        toolbar.setIconSize(QSize(16, 16))
-
-        # Оставляем только кнопки массового выделения
-        self.act_check_all = QAction("✅ Выделить все", self)
-        self.act_uncheck_all = QAction("⬜ Снять все", self)
-        self.act_check_all.triggered.connect(self.select_all)
-        self.act_uncheck_all.triggered.connect(self.select_none)
-        toolbar.addAction(self.act_check_all)
-        toolbar.addAction(self.act_uncheck_all)
-
-        # Убраны глобальные кнопки Приостановить/Возобновить
-
-        # растяжка
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        toolbar.addWidget(spacer)
-
-        toolbar.addWidget(QLabel("Сортировка:"))
+        # --- Панель сортировки (вместо полноценного Toolbar) ---
+        sort_layout = QHBoxLayout()
+        sort_layout.addStretch() # Прижимаем вправо
+        sort_layout.addWidget(QLabel("Сортировка:"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Сначала системные", "По имени (А-Я)", "Сначала заблокированные"])
         self.sort_combo.currentIndexChanged.connect(self._rebuild_list)
-        toolbar.addWidget(self.sort_combo)
-
-        root.addWidget(toolbar)
+        sort_layout.addWidget(self.sort_combo)
+        root.addLayout(sort_layout)
 
         # --- Список ---
         self.list_widget = QListWidget()
@@ -368,7 +335,7 @@ class SnapManager(QDialog):
         self.list_widget.itemChanged.connect(self._on_item_changed)
         root.addWidget(self.list_widget, 1)
 
-        # --- Нижняя панель действий (Кнопка Закрыть удалена) ---
+        # --- Нижняя панель действий (только главные кнопки) ---
         bottom = QHBoxLayout()
         bottom.setSpacing(10)
 
@@ -381,10 +348,10 @@ class SnapManager(QDialog):
 
         bottom.addWidget(self.btn_apply)
         bottom.addWidget(self.btn_update)
-        bottom.addStretch() # растягиваем, чтобы кнопки были слева
+        bottom.addStretch()
         root.addLayout(bottom)
 
-        # --- Статус-бар (имитация через QLabel) ---
+        # --- Статус-бар ---
         self.status = QLabel()
         self.status.setObjectName("headerStatus")
         self.status.setStyleSheet("font-size: 9pt; color: #777;")
@@ -392,6 +359,8 @@ class SnapManager(QDialog):
 
         # --- Верхнее меню (Menu Bar) ---
         menubar = QMenuBar(self)
+
+        # 1. Меню "Управление Snap"
         snap_menu = menubar.addMenu("Управление Snap")
         
         act_hold = QAction("🌐 Приостановить все обновления", self)
@@ -411,16 +380,27 @@ class SnapManager(QDialog):
         act_quit.triggered.connect(self.reject)
         snap_menu.addAction(act_quit)
         
+        # 2. Меню "Выделение"
+        select_menu = menubar.addMenu("Выделение")
+        
+        act_check_all = QAction("✅ Выделить все", self)
+        act_check_all.setShortcut(QKeySequence("Ctrl+A"))
+        act_check_all.triggered.connect(self.select_all)
+        select_menu.addAction(act_check_all)
+        
+        act_uncheck_all = QAction("⬜ Снять все", self)
+        act_uncheck_all.setShortcut(QKeySequence("Ctrl+D"))
+        act_uncheck_all.triggered.connect(self.select_none)
+        select_menu.addAction(act_uncheck_all)
+
+
         root.setMenuBar(menubar)
 
-        # Горячие клавиши
-        QShortcut(QKeySequence("Ctrl+A"), self, activated=self.select_all)
-        QShortcut(QKeySequence("Ctrl+D"), self, activated=self.select_none)
+        # Дополнительные горячие клавиши (Return для применения)
         QShortcut(QKeySequence("Return"), self, activated=self.on_apply)
 
     # --- Данные ---
     def _load_data(self):
-        # очищаем — важно, чтобы не тащить старые множества
         self.initial_status.clear()
         self.pkg_display.clear()
         self.is_system.clear()
@@ -460,7 +440,6 @@ class SnapManager(QDialog):
         return sorted(pkgs, key=lambda p: (-self.is_system[p], p))
 
     def _rebuild_list(self):
-        # блокируем сигнал на время перестройки — чтобы не дёргать _on_item_changed
         self.list_widget.blockSignals(True)
         self.list_widget.clear()
         for pkg in self._sorted_packages():
@@ -468,7 +447,6 @@ class SnapManager(QDialog):
             item.setData(Qt.UserRole, pkg)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Checked if pkg in self.current_checked else Qt.Unchecked)
-            # системные — лёгкий серый фон и подсказка
             if self.is_system[pkg]:
                 item.setToolTip("Системный компонент — блокировать не рекомендуется")
                 item.setForeground(QBrush(QColor("#555555")))
@@ -498,7 +476,6 @@ class SnapManager(QDialog):
         item = self.list_widget.itemAt(pos)
         if not item:
             return
-        pkg = item.data(Qt.UserRole)
         menu = QMenu(self)
         act_check = menu.addAction("✅ Выделить")
         act_uncheck = menu.addAction("⬜ Снять")
@@ -510,7 +487,6 @@ class SnapManager(QDialog):
         elif chosen == act_uncheck:
             item.setCheckState(Qt.Unchecked)
         elif chosen == act_toggle:
-            # программно переключаем галочку
             item.setCheckState(
                 Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
             )
