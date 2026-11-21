@@ -288,7 +288,7 @@ class SnapManager(QDialog):
         super().__init__()
         self.snapd_ver = snapd_ver
         self.setWindowTitle(f"{TITLE_BASE} (v{snapd_ver})")
-        self.resize(720, 780)
+        self.resize(520, 780)
         self.setStyleSheet(STYLE)
 
         self.initial_status = {}
@@ -306,15 +306,19 @@ class SnapManager(QDialog):
         root.setSpacing(12)
 
         # --- Шапка ---
-        
-        header = QVBoxLayout()
-        header.setSpacing(2)
+        header = QHBoxLayout()
+        header.setSpacing(8)
+
         title = QLabel("Snap-пакеты")
         title.setObjectName("headerTitle")
+
         self.global_label = QLabel()
         self.global_label.setObjectName("headerStatus")
+
         header.addWidget(title)
+        header.addStretch()          # прижимает global_label вправо
         header.addWidget(self.global_label)
+        header.setAlignment(self.global_label, Qt.AlignVCenter)
         root.addLayout(header)
 
         # --- Панель сортировки (вместо полноценного Toolbar) ---
@@ -422,7 +426,7 @@ class SnapManager(QDialog):
         if held_globally:
             self.global_label.setText("🔴 Обновления приостановлены глобально")
         else:
-            self.global_label.setText("🟢 Обновления активны (фон)")
+            self.global_label.setText("🟢 Обновления активны (фоновый режим)")
         self.global_label.setProperty("held", "true" if held_globally else "false")
         self.global_label.style().unpolish(self.global_label)
         self.global_label.style().polish(self.global_label)
