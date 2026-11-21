@@ -183,7 +183,7 @@ STYLE = """
 QDialog { background: #f7f8fa; }
 
 QLabel#headerTitle {
-    font-size: 15pt; font-weight: 600; color: #1a1a1a;
+    font-size: 10pt; color: #1a1a1a;
 }
 QLabel#headerStatus {
     font-size: 10pt; color: #555; padding: 4px 0;
@@ -288,7 +288,7 @@ class SnapManager(QDialog):
         super().__init__()
         self.snapd_ver = snapd_ver
         self.setWindowTitle(f"{TITLE_BASE} (v{snapd_ver})")
-        self.resize(520, 780)
+        self.resize(460, 680)
         self.setStyleSheet(STYLE)
 
         self.initial_status = {}
@@ -305,31 +305,25 @@ class SnapManager(QDialog):
         root.setContentsMargins(18, 16, 18, 12)
         root.setSpacing(12)
 
-        # --- Шапка ---
+        # --- Шапка: статус глобальной блокировки (слева) ---
         header = QHBoxLayout()
         header.setSpacing(8)
-
-        title = QLabel("Snap-пакеты")
-        title.setObjectName("headerTitle")
-
         self.global_label = QLabel()
         self.global_label.setObjectName("headerStatus")
-
-        header.addWidget(title)
-        header.addStretch()          # прижимает global_label вправо
         header.addWidget(self.global_label)
-        header.setAlignment(self.global_label, Qt.AlignVCenter)
+        header.addStretch()
         root.addLayout(header)
 
-        # --- Панель сортировки (вместо полноценного Toolbar) ---
-        sort_layout = QHBoxLayout()
-        sort_layout.addStretch() # Прижимаем вправо
-        sort_layout.addWidget(QLabel("Сортировка:"))
+        # --- Строка: сортировка слева ---
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+        top_row.addWidget(QLabel("Сортировка:"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Сначала системные", "По имени (А-Я)", "Сначала заблокированные"])
         self.sort_combo.currentIndexChanged.connect(self._rebuild_list)
-        sort_layout.addWidget(self.sort_combo)
-        root.addLayout(sort_layout)
+        top_row.addWidget(self.sort_combo)
+        top_row.addStretch()
+        root.addLayout(top_row)
 
         # --- Список ---
         self.list_widget = QListWidget()
@@ -339,11 +333,11 @@ class SnapManager(QDialog):
         self.list_widget.itemChanged.connect(self._on_item_changed)
         root.addWidget(self.list_widget, 1)
 
-        # --- Нижняя панель действий (только главные кнопки) ---
+        # --- Нижняя панель действий ---
         bottom = QHBoxLayout()
         bottom.setSpacing(10)
 
-        self.btn_apply = QPushButton("💾 Применить")
+        self.btn_apply = QPushButton("💾 Применить блокировку")
         self.btn_apply.setObjectName("primary")
         self.btn_apply.clicked.connect(self.on_apply)
 
@@ -384,8 +378,8 @@ class SnapManager(QDialog):
         act_quit.triggered.connect(self.reject)
         snap_menu.addAction(act_quit)
         
-        # 2. Меню "Выделение"
-        select_menu = menubar.addMenu("Выделение")
+        # 2. Меню "Отметить пакеты"
+        select_menu = menubar.addMenu("Отметить пакеты")
         
         act_check_all = QAction("✅ Выделить все", self)
         act_check_all.setShortcut(QKeySequence("Ctrl+A"))
