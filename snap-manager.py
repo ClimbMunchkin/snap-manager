@@ -6,6 +6,8 @@ import sys
 import re
 import subprocess
 import time
+import configparser
+import pwd
 from datetime import datetime
 
 from PyQt5.QtWidgets import (
@@ -19,6 +21,9 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QKeySequence, QColor, QBrush, QPalette
 
 LOG_DIR = "/var/log/snap-update-manager"
+
+APP_DIR_NAME = "snap-manager"
+SETTINGS_FILE = "settings.ini"
 
 SYSTEM_SNAPS_RE = re.compile(
     r"^(bare|core.*|snapd.*|gnome-.*|mesa-.*|gtk.*|webkitgtk.*|firmware-updater)$"
@@ -98,6 +103,66 @@ def is_global_held():
     if rc != 0:
         return False
     return bool(re.search(r"^hold:\s*(forever|\d)", out, re.MULTILINE))
+
+
+# ---------- Настройки пользователя ----------
+def get_user_config_dir():
+    """Каталог конфигурации реального пользователя (учитывая sudo)."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        return os.path.join(xdg, APP_DIR_NAME)
+
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and sudo_user != "root":
+        try:
+            home = pwd.getpwnam(sudo_user).pw_dir
+            return os.path.join(home, ".config", APP_DIR_NAME)
+        except KeyError:
+            pass
+
+    return os.path.join(os.path.expanduser("~"), ".config", APP_DIR_NAME)
+
+
+def load_theme():
+    """Читает сохранённую тему. Возвращает 'light' или 'dark'."""
+    path = os.path.join(get_user_config_dir(), SETTINGS_FILE)
+    parser = configparser.ConfigParser()
+    try:
+        parser.read(path, encoding="utf-8")
+        theme = parser.get("ui", "theme", fallback="light").strip().lower()
+        return theme if theme in ("light", "dark") else "light"
+    except (OSError, configparser.Error):
+        return "light"
+
+
+def save_theme(theme):
+    """Сохраняет тему. Ошибки записи не ломают UI."""
+    if theme not in ("light", "dark"):
+        return
+    cfg_dir = get_user_config_dir()
+    path = os.path.join(cfg_dir, SETTINGS_FILE)
+    try:
+        os.makedirs(cfg_dir, exist_ok=True)
+        parser = configparser.ConfigParser()
+        if os.path.exists(path):
+            parser.read(path, encoding="utf-8")
+        if not parser.has_section("ui"):
+            parser.add_section("ui")
+        parser.set("ui", "theme", theme)
+        with open(path, "w", encoding="utf-8") as f:
+            parser.write(f)
+
+        # При запуске через sudo файл создастся от root — вернём владельца
+        sudo_user = os.environ.get("SUDO_USER")
+        if sudo_user and sudo_user != "root":
+            try:
+                pw = pwd.getpwnam(sudo_user)
+                os.chown(path, pw.pw_uid, pw.pw_gid)
+                os.chown(cfg_dir, pw.pw_uid, pw.pw_gid)
+            except (KeyError, PermissionError, OSError):
+                pass
+    except OSError:
+        pass
 
 
 # ---------- Фоновый обновитель ----------
@@ -480,7 +545,7 @@ class SnapManager(QDialog):
     def __init__(self, snapd_ver):
         super().__init__()
         self.snapd_ver = snapd_ver
-        self.current_theme = "light"
+        self.current_theme = load_theme()
         self.setWindowTitle(f"{TITLE_BASE} (v{snapd_ver})")
         self.resize(460, 680)
         self.setStyleSheet(STYLE_LIGHT)
@@ -492,6 +557,8 @@ class SnapManager(QDialog):
 
         self._build_ui()
         self._load_data()
+        from PyQt5.QtCore import QTimer
+        QTimer.singleShot(0, lambda: self.apply_theme(self.current_theme))
 
     # --- Палитры ---
     def _apply_dark_palette(self):
@@ -621,7 +688,6 @@ class SnapManager(QDialog):
         theme_group.setExclusive(True)
 
         self.act_theme_light = QAction("☀️ Светлая тема", self, checkable=True)
-        self.act_theme_light.setChecked(True)
         self.act_theme_light.triggered.connect(lambda: self.apply_theme("light"))
         theme_group.addAction(self.act_theme_light)
         theme_menu.addAction(self.act_theme_light)
@@ -658,6 +724,13 @@ class SnapManager(QDialog):
     # --- Тема ---
     def apply_theme(self, theme):
         self.current_theme = theme
+        save_theme(theme)
+
+        # синхронизируем чекбоксы в меню
+        if hasattr(self, "act_theme_light"):
+            self.act_theme_light.setChecked(theme == "light")
+            self.act_theme_dark.setChecked(theme == "dark")
+
         style = STYLE_DARK if theme == "dark" else STYLE_LIGHT
 
         if theme == "dark":
@@ -711,8 +784,7 @@ class SnapManager(QDialog):
             w.style().polish(w)
             w.update()
 
-        self.setStyleSheet(STYLE_DARK if self.current_theme == "dark" else STYLE_LIGHT)
-
+        
         self._rebuild_list()
         self._update_status()
 
