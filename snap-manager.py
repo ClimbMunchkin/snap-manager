@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
     QShortcut, QMenuBar
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
-from PyQt5.QtGui import QKeySequence, QColor, QBrush
+from PyQt5.QtGui import QKeySequence, QColor, QBrush, QPalette
 
 LOG_DIR = "/var/log/snap-update-manager"
 
@@ -201,15 +201,15 @@ QFrame#card {
 /* --- Баннер глобального состояния (вариант A) --- */
 QFrame#statusBanner {
     border-radius: 10px;
-    background: #e9f7ee;              /* fallback = активное состояние */
+    background: #e9f7ee;
     border: 1px solid #bfe3ca;
 }
 QFrame#statusBanner[held="true"] {
-    background: #fdecec;              /* мягкий красный */
+    background: #fdecec;
     border: 1px solid #f3c2c4;
 }
 QFrame#statusBanner[held="false"] {
-    background: #e9f7ee;              /* мягкий зелёный */
+    background: #e9f7ee;
     border: 1px solid #bfe3ca;
 }
 
@@ -260,13 +260,27 @@ QComboBox {
     font-size: 10pt;
     min-width: 180px;
     color: #1a1a1a;
+    outline: 0;
 }
 QComboBox:hover { border-color: #b9bec6; }
 QComboBox::drop-down { border: none; width: 24px; }
 QComboBox QAbstractItemView {
-    border: 1px solid #e3e6ea; border-radius: 8px;
-    background: #ffffff; selection-background-color: #e8f0fe;
-    selection-color: #1a1a1a; padding: 4px;
+    border: 1px solid #e3e6ea;
+    border-radius: 8px;
+    background: #ffffff;
+    selection-background-color: #e8f0fe;
+    selection-color: #1a1a1a;
+    padding: 4px;
+    color: #1a1a1a;
+    outline: 0;
+}
+QComboBox QAbstractItemView::item {
+    background: #ffffff;
+    color: #1a1a1a;
+    min-height: 22px;
+}
+QComboBox QAbstractItemView::item:hover {
+    background: #e8f0fe;
 }
 
 QMenuBar {
@@ -322,15 +336,15 @@ QFrame#card {
 /* --- Баннер глобального состояния (тёмная тема) --- */
 QFrame#statusBanner {
     border-radius: 10px;
-    background: #1f3a2a;              /* fallback = активное состояние */
+    background: #1f3a2a;
     border: 1px solid #2e5a3f;
 }
 QFrame#statusBanner[held="true"] {
-    background: #3a1f22;              /* приглушённый тёмно-красный */
+    background: #3a1f22;
     border: 1px solid #6b2f35;
 }
 QFrame#statusBanner[held="false"] {
-    background: #1f3a2a;              /* приглушённый тёмно-зелёный */
+    background: #1f3a2a;
     border: 1px solid #2e5a3f;
 }
 
@@ -383,14 +397,31 @@ QComboBox {
     font-size: 10pt;
     min-width: 180px;
     color: #e6e6e6;
+    outline: 0;
 }
 QComboBox:hover { border-color: #4a4e54; }
 QComboBox::drop-down { border: none; width: 24px; }
 QComboBox QAbstractItemView {
-    border: 1px solid #3a3d42; border-radius: 8px;
-    background: #26282c; selection-background-color: #2f4a7a;
-    selection-color: #ffffff; padding: 4px;
+    border: 1px solid #3a3d42;
+    border-radius: 8px;
+    background: #26282c;
+    selection-background-color: #2f4a7a;
+    selection-color: #ffffff;
+    padding: 4px;
     color: #e6e6e6;
+    outline: 0;
+}
+QComboBox QAbstractItemView::item {
+    background: #26282c;
+    color: #e6e6e6;
+    min-height: 22px;
+}
+QComboBox QAbstractItemView::item:hover {
+    background: #2f4a7a;
+}
+QComboBox QAbstractItemView::item:selected {
+    background: #2f4a7a;
+    color: #ffffff;
 }
 
 QMenuBar {
@@ -441,7 +472,6 @@ QToolTip {
 }
 """
 
-# Совместимость: STYLE указывает на светлую тему по умолчанию
 STYLE = STYLE_LIGHT
 
 
@@ -463,6 +493,43 @@ class SnapManager(QDialog):
         self._build_ui()
         self._load_data()
 
+    # --- Палитры ---
+    def _apply_dark_palette(self):
+        pal = QPalette()
+        pal.setColor(QPalette.Window, QColor("#1e1f22"))
+        pal.setColor(QPalette.WindowText, QColor("#e6e6e6"))
+        pal.setColor(QPalette.Base, QColor("#26282c"))
+        pal.setColor(QPalette.AlternateBase, QColor("#2a2c30"))
+        pal.setColor(QPalette.ToolTipBase, QColor("#2a2c30"))
+        pal.setColor(QPalette.ToolTipText, QColor("#e6e6e6"))
+        pal.setColor(QPalette.Text, QColor("#e6e6e6"))
+        pal.setColor(QPalette.Button, QColor("#2a2c30"))
+        pal.setColor(QPalette.ButtonText, QColor("#e6e6e6"))
+        pal.setColor(QPalette.BrightText, QColor("#ff6b6b"))
+        pal.setColor(QPalette.Link, QColor("#4a86f7"))
+        pal.setColor(QPalette.Highlight, QColor("#2f4a7a"))
+        pal.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+        pal.setColor(QPalette.Disabled, QPalette.Text, QColor("#6b6f75"))
+        pal.setColor(QPalette.Disabled, QPalette.ButtonText, QColor("#6b6f75"))
+        QApplication.setPalette(pal)
+
+    def _apply_light_palette(self):
+        pal = QPalette()
+        pal.setColor(QPalette.Window, QColor("#f7f8fa"))
+        pal.setColor(QPalette.WindowText, QColor("#1a1a1a"))
+        pal.setColor(QPalette.Base, QColor("#ffffff"))
+        pal.setColor(QPalette.AlternateBase, QColor("#f2f5f9"))
+        pal.setColor(QPalette.ToolTipBase, QColor("#ffffff"))
+        pal.setColor(QPalette.ToolTipText, QColor("#1a1a1a"))
+        pal.setColor(QPalette.Text, QColor("#1a1a1a"))
+        pal.setColor(QPalette.Button, QColor("#ffffff"))
+        pal.setColor(QPalette.ButtonText, QColor("#1a1a1a"))
+        pal.setColor(QPalette.BrightText, QColor("#e5484d"))
+        pal.setColor(QPalette.Link, QColor("#2d6cdf"))
+        pal.setColor(QPalette.Highlight, QColor("#e8f0fe"))
+        pal.setColor(QPalette.HighlightedText, QColor("#1a1a1a"))
+        QApplication.setPalette(pal)
+
     # --- UI ---
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -472,8 +539,6 @@ class SnapManager(QDialog):
         # --- Баннер глобального состояния (вариант A) ---
         self.status_banner = QFrame()
         self.status_banner.setObjectName("statusBanner")
-        # Ключевые фиксы: фон из QSS рисуется только при WA_StyledBackground,
-        # а собственная рамка QFrame не должна конфликтовать с border из QSS.
         self.status_banner.setAttribute(Qt.WA_StyledBackground, True)
         self.status_banner.setFrameShape(QFrame.NoFrame)
         card_lay = QHBoxLayout(self.status_banner)
@@ -495,6 +560,9 @@ class SnapManager(QDialog):
         self.sort_combo = QComboBox()
         self.sort_combo.addItems(["Сначала системные", "По имени (А-Я)", "Сначала заблокированные"])
         self.sort_combo.currentIndexChanged.connect(self._rebuild_list)
+        # Убираем внешнюю (квадратную) рамку popup-списка — остаётся только QSS-рамка
+        self.sort_combo.view().setFrameShape(QFrame.NoFrame)
+        self.sort_combo.view().setAutoFillBackground(False)
         top_row.addWidget(self.sort_combo)
         top_row.addStretch()
         root.addLayout(top_row)
@@ -585,16 +653,20 @@ class SnapManager(QDialog):
 
         root.setMenuBar(menubar)
 
-        # Дополнительные горячие клавиши (Return для применения)
         QShortcut(QKeySequence("Return"), self, activated=self.on_apply)
 
     # --- Тема ---
     def apply_theme(self, theme):
         self.current_theme = theme
         style = STYLE_DARK if theme == "dark" else STYLE_LIGHT
+
+        if theme == "dark":
+            self._apply_dark_palette()
+        else:
+            self._apply_light_palette()
+
         self.setStyleSheet(style)
 
-        # Переприменяем property-селекторы баннера после смены QSS
         held_str = self.status_banner.property("held") or "false"
         for w in (self.status_banner, self.global_label):
             w.setProperty("held", held_str)
@@ -602,7 +674,6 @@ class SnapManager(QDialog):
             w.style().polish(w)
             w.update()
 
-        # Статус-бар имеет inline-стиль — обновим его под тему
         if theme == "dark":
             self.status.setStyleSheet("font-size: 9pt; color: #8b9097;")
         else:
@@ -633,7 +704,6 @@ class SnapManager(QDialog):
         else:
             self.global_label.setText("🟢 Обновления активны (фоновый режим)")
 
-        # Применяем свойство к баннеру и лейблу + принудительно перечитываем QSS
         held_str = "true" if held_globally else "false"
         for w in (self.status_banner, self.global_label):
             w.setProperty("held", held_str)
@@ -641,7 +711,6 @@ class SnapManager(QDialog):
             w.style().polish(w)
             w.update()
 
-        # Переустановка stylesheet гарантирует пересчёт property-селекторов
         self.setStyleSheet(STYLE_DARK if self.current_theme == "dark" else STYLE_LIGHT)
 
         self._rebuild_list()
