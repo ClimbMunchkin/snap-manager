@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (
     QAction, QActionGroup, QFrame, QMenu, QWidget, QSizePolicy,
     QShortcut, QMenuBar
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
 from PyQt5.QtGui import QKeySequence, QColor, QBrush, QPalette
 
 LOG_DIR = "/var/log/snap-update-manager"
@@ -557,7 +557,6 @@ class SnapManager(QDialog):
 
         self._build_ui()
         self._load_data()
-        from PyQt5.QtCore import QTimer
         QTimer.singleShot(0, lambda: self.apply_theme(self.current_theme))
 
     # --- Палитры ---
@@ -717,6 +716,13 @@ class SnapManager(QDialog):
         act_uncheck_all.triggered.connect(self.select_none)
         select_menu.addAction(act_uncheck_all)
 
+        select_menu.addSeparator()
+
+        act_reset = QAction("↩️ Вернуть исходные отметки", self)
+        act_reset.setShortcut(QKeySequence("Ctrl+R"))
+        act_reset.triggered.connect(self.reset_to_initial)
+        select_menu.addAction(act_reset)
+
         root.setMenuBar(menubar)
 
         QShortcut(QKeySequence("Return"), self, activated=self.on_apply)
@@ -838,6 +844,8 @@ class SnapManager(QDialog):
         act_uncheck = menu.addAction("⬜ Снять")
         menu.addSeparator()
         act_toggle = menu.addAction("🔒 Переключить блокировку (без применения)")
+        menu.addSeparator()
+        act_reset = menu.addAction("↩️ Вернуть исходные отметки")
         chosen = menu.exec_(self.list_widget.mapToGlobal(pos))
         if chosen == act_check:
             item.setCheckState(Qt.Checked)
@@ -847,6 +855,8 @@ class SnapManager(QDialog):
             item.setCheckState(
                 Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked
             )
+        elif chosen == act_reset:
+            self.reset_to_initial()
 
     # --- Массовые операции ---
     def select_all(self):
@@ -865,6 +875,18 @@ class SnapManager(QDialog):
             it.setCheckState(Qt.Unchecked)
         self.list_widget.blockSignals(False)
         self.current_checked.clear()
+        self._update_status()
+
+    def reset_to_initial(self):
+        """Возвращает галочки к состоянию, загруженному при старте (или последнем применении)."""
+        self.list_widget.blockSignals(True)
+        for i in range(self.list_widget.count()):
+            it = self.list_widget.item(i)
+            pkg = it.data(Qt.UserRole)
+            it.setCheckState(Qt.Checked if self.initial_status.get(pkg, 0) else Qt.Unchecked)
+        self.list_widget.blockSignals(False)
+
+        self.current_checked = {p for p, v in self.initial_status.items() if v == 1}
         self._update_status()
 
     # --- Глобальные действия ---
