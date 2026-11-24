@@ -186,15 +186,30 @@ QLabel#headerTitle {
     font-size: 10pt; color: #1a1a1a;
 }
 QLabel#headerStatus {
-    font-size: 11pt; color: #555; padding: 4px 0;
+    font-size: 11pt; color: #555; padding: 2px 0;
 }
-QLabel#headerStatus[held="true"] { color: #c0392b; font-weight: 600; }
-QLabel#headerStatus[held="false"] { color: #27ae60; font-weight: 600; }
+QLabel#headerStatus[held="true"] { color: #000000; font-weight: 400; }
+QLabel#headerStatus[held="false"] { color: #000000; font-weight: 400; }
 
 QFrame#card {
     background: #ffffff;
     border: 1px solid #e3e6ea;
     border-radius: 10px;
+}
+
+/* --- Баннер глобального состояния (вариант A) --- */
+QFrame#statusBanner {
+    border-radius: 10px;
+    background: #e9f7ee;              /* fallback = активное состояние */
+    border: 1px solid #bfe3ca;
+}
+QFrame#statusBanner[held="true"] {
+    background: #fdecec;              /* мягкий красный */
+    border: 1px solid #f3c2c4;
+}
+QFrame#statusBanner[held="false"] {
+    background: #e9f7ee;              /* мягкий зелёный */
+    border: 1px solid #bfe3ca;
 }
 
 QListWidget {
@@ -305,14 +320,24 @@ class SnapManager(QDialog):
         root.setContentsMargins(18, 16, 18, 12)
         root.setSpacing(12)
 
-        # --- Шапка: статус глобальной блокировки (слева) ---
-        header = QHBoxLayout()
-        header.setSpacing(8)
+        # --- Баннер глобального состояния ---
+        self.status_banner = QFrame()
+        self.status_banner.setObjectName("statusBanner")
+        # Ключевые фиксы: фон из QSS рисуется только при WA_StyledBackground,
+        # а собственная рамка QFrame не должна конфликтовать с border из QSS.
+        self.status_banner.setAttribute(Qt.WA_StyledBackground, True)
+        self.status_banner.setFrameShape(QFrame.NoFrame)
+        card_lay = QHBoxLayout(self.status_banner)
+        card_lay.setContentsMargins(14, 10, 14, 10)
+        card_lay.setSpacing(8)
+
         self.global_label = QLabel()
         self.global_label.setObjectName("headerStatus")
-        header.addWidget(self.global_label)
-        header.addStretch()
-        root.addLayout(header)
+        card_lay.addWidget(self.global_label)
+        card_lay.addStretch()
+
+        root.addWidget(self.status_banner)
+        root.addSpacing(2)
 
         # --- Строка: сортировка слева ---
         top_row = QHBoxLayout()
@@ -360,37 +385,36 @@ class SnapManager(QDialog):
 
         # 1. Меню "Управление Snap"
         snap_menu = menubar.addMenu("Управление Snap")
-        
+
         act_hold = QAction("⛔ Приостановить все обновления", self)
         act_hold.setShortcut(QKeySequence("Ctrl+Shift+H"))
         act_hold.triggered.connect(self.on_global_hold)
         snap_menu.addAction(act_hold)
-        
+
         act_unhold = QAction("🌐 Возобновить все обновления", self)
         act_unhold.setShortcut(QKeySequence("Ctrl+Shift+U"))
         act_unhold.triggered.connect(self.on_global_unhold)
         snap_menu.addAction(act_unhold)
-        
+
         snap_menu.addSeparator()
-        
+
         act_quit = QAction("Выход", self)
         act_quit.setShortcut(QKeySequence("Ctrl+Q"))
         act_quit.triggered.connect(self.reject)
         snap_menu.addAction(act_quit)
-        
+
         # 2. Меню "Отметить пакеты"
         select_menu = menubar.addMenu("Отметить пакеты")
-        
+
         act_check_all = QAction("✅ Выделить все", self)
         act_check_all.setShortcut(QKeySequence("Ctrl+A"))
         act_check_all.triggered.connect(self.select_all)
         select_menu.addAction(act_check_all)
-        
+
         act_uncheck_all = QAction("⬜ Снять все", self)
         act_uncheck_all.setShortcut(QKeySequence("Ctrl+D"))
         act_uncheck_all.triggered.connect(self.select_none)
         select_menu.addAction(act_uncheck_all)
-
 
         root.setMenuBar(menubar)
 
@@ -421,9 +445,17 @@ class SnapManager(QDialog):
             self.global_label.setText("🔴 Все обновления приостановлены")
         else:
             self.global_label.setText("🟢 Обновления активны (фоновый режим)")
-        self.global_label.setProperty("held", "true" if held_globally else "false")
-        self.global_label.style().unpolish(self.global_label)
-        self.global_label.style().polish(self.global_label)
+
+        # Применяем свойство к баннеру и лейблу + принудительно перечитываем QSS
+        held_str = "true" if held_globally else "false"
+        for w in (self.status_banner, self.global_label):
+            w.setProperty("held", held_str)
+            w.style().unpolish(w)
+            w.style().polish(w)
+            w.update()
+
+        # Переустановка stylesheet гарантирует пересчёт property-селекторов
+        self.setStyleSheet(STYLE)
 
         self._rebuild_list()
         self._update_status()
@@ -447,7 +479,6 @@ class SnapManager(QDialog):
             item.setCheckState(Qt.Checked if pkg in self.current_checked else Qt.Unchecked)
             if self.is_system[pkg]:
                 item.setToolTip("Системный компонент — блокировать не рекомендуется")
-                #item.setForeground(QBrush(QColor("#555555")))
             if self.initial_status[pkg]:
                 item.setToolTip((item.toolTip() + "\n" if item.toolTip() else "")
                                 + "Сейчас заблокирован (--hold)")
