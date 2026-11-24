@@ -12,7 +12,8 @@ from PyQt5.QtWidgets import (
     QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QPushButton, QMessageBox,
     QProgressDialog, QTextEdit, QComboBox, QAbstractItemView,
-    QAction, QFrame, QMenu, QWidget, QSizePolicy, QShortcut, QMenuBar
+    QAction, QActionGroup, QFrame, QMenu, QWidget, QSizePolicy,
+    QShortcut, QMenuBar
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QKeySequence, QColor, QBrush
@@ -179,7 +180,7 @@ class UpdateWorker(QThread):
 
 
 # ---------- Стили ----------
-STYLE = """
+STYLE_LIGHT = """
 QDialog { background: #f7f8fa; }
 
 QLabel#headerTitle {
@@ -258,6 +259,7 @@ QComboBox {
     padding: 6px 10px;
     font-size: 10pt;
     min-width: 180px;
+    color: #1a1a1a;
 }
 QComboBox:hover { border-color: #b9bec6; }
 QComboBox::drop-down { border: none; width: 24px; }
@@ -271,6 +273,7 @@ QMenuBar {
     background: #ffffff;
     border-bottom: 1px solid #e3e6ea;
     font-size: 10pt;
+    color: #1a1a1a;
 }
 QMenuBar::item {
     background: transparent;
@@ -283,6 +286,7 @@ QMenu {
     border: 1px solid #e3e6ea;
     border-radius: 8px;
     padding: 4px;
+    color: #1a1a1a;
 }
 QMenu::item {
     padding: 6px 24px;
@@ -296,15 +300,160 @@ QMenu::separator {
 }
 """
 
+STYLE_DARK = """
+QDialog { background: #1e1f22; }
+
+QLabel { color: #e6e6e6; }
+QLabel#headerTitle {
+    font-size: 10pt; color: #e6e6e6;
+}
+QLabel#headerStatus {
+    font-size: 11pt; color: #b8bcc2; padding: 2px 0;
+}
+QLabel#headerStatus[held="true"] { color: #e6e6e6; font-weight: 400; }
+QLabel#headerStatus[held="false"] { color: #e6e6e6; font-weight: 400; }
+
+QFrame#card {
+    background: #26282c;
+    border: 1px solid #3a3d42;
+    border-radius: 10px;
+}
+
+/* --- Баннер глобального состояния (тёмная тема) --- */
+QFrame#statusBanner {
+    border-radius: 10px;
+    background: #1f3a2a;              /* fallback = активное состояние */
+    border: 1px solid #2e5a3f;
+}
+QFrame#statusBanner[held="true"] {
+    background: #3a1f22;              /* приглушённый тёмно-красный */
+    border: 1px solid #6b2f35;
+}
+QFrame#statusBanner[held="false"] {
+    background: #1f3a2a;              /* приглушённый тёмно-зелёный */
+    border: 1px solid #2e5a3f;
+}
+
+QListWidget {
+    background: #26282c;
+    border: 1px solid #3a3d42;
+    border-radius: 10px;
+    padding: 6px;
+    font-size: 10.5pt;
+    color: #e6e6e6;
+}
+QListWidget::item {
+    padding: 8px 6px;
+    border-radius: 6px;
+    color: #e6e6e6;
+}
+QListWidget::item:selected {
+    background: #2f4a7a;
+    color: #ffffff;
+}
+QListWidget::item:hover {
+    background: #2d3035;
+}
+
+QPushButton {
+    background: #2a2c30;
+    border: 1px solid #3a3d42;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 10pt;
+    color: #e6e6e6;
+}
+QPushButton:hover { background: #32353a; border-color: #4a4e54; }
+QPushButton:pressed { background: #3a3d42; }
+QPushButton:disabled { color: #6b6f75; border-color: #2a2c30; }
+
+QPushButton#primary {
+    background: #4a86f7; color: #ffffff; border: none;
+    font-weight: 600;
+}
+QPushButton#primary:hover { background: #3f76dc; }
+QPushButton#primary:pressed { background: #3567c4; }
+QPushButton#primary:disabled { background: #2f4a7a; color: #b8bcc2; }
+
+QComboBox {
+    background: #2a2c30;
+    border: 1px solid #3a3d42;
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 10pt;
+    min-width: 180px;
+    color: #e6e6e6;
+}
+QComboBox:hover { border-color: #4a4e54; }
+QComboBox::drop-down { border: none; width: 24px; }
+QComboBox QAbstractItemView {
+    border: 1px solid #3a3d42; border-radius: 8px;
+    background: #26282c; selection-background-color: #2f4a7a;
+    selection-color: #ffffff; padding: 4px;
+    color: #e6e6e6;
+}
+
+QMenuBar {
+    background: #26282c;
+    border-bottom: 1px solid #3a3d42;
+    font-size: 10pt;
+    color: #e6e6e6;
+}
+QMenuBar::item {
+    background: transparent;
+    padding: 6px 12px;
+    border-radius: 4px;
+}
+QMenuBar::item:selected { background: #32353a; }
+QMenu {
+    background: #26282c;
+    border: 1px solid #3a3d42;
+    border-radius: 8px;
+    padding: 4px;
+    color: #e6e6e6;
+}
+QMenu::item {
+    padding: 6px 24px;
+    border-radius: 4px;
+}
+QMenu::item:selected { background: #2f4a7a; }
+QMenu::separator {
+    height: 1px;
+    background: #3a3d42;
+    margin: 4px 8px;
+}
+
+QProgressDialog { background: #1e1f22; color: #e6e6e6; }
+QProgressBar {
+    background: #2a2c30; border: 1px solid #3a3d42;
+    border-radius: 6px; text-align: center; color: #e6e6e6;
+}
+QProgressBar::chunk { background: #4a86f7; border-radius: 5px; }
+
+QTextEdit {
+    background: #26282c; color: #e6e6e6;
+    border: 1px solid #3a3d42; border-radius: 8px;
+}
+
+QToolTip {
+    background: #2a2c30; color: #e6e6e6;
+    border: 1px solid #3a3d42; padding: 4px;
+}
+"""
+
+# Совместимость: STYLE указывает на светлую тему по умолчанию
+STYLE = STYLE_LIGHT
+
 
 # ---------- Главное окно ----------
 class SnapManager(QDialog):
     def __init__(self, snapd_ver):
         super().__init__()
         self.snapd_ver = snapd_ver
+        self.current_theme = "light"
         self.setWindowTitle(f"{TITLE_BASE} (v{snapd_ver})")
         self.resize(460, 680)
-        self.setStyleSheet(STYLE)
+        self.setStyleSheet(STYLE_LIGHT)
 
         self.initial_status = {}
         self.pkg_display = {}
@@ -320,7 +469,7 @@ class SnapManager(QDialog):
         root.setContentsMargins(18, 16, 18, 12)
         root.setSpacing(12)
 
-        # --- Баннер глобального состояния ---
+        # --- Баннер глобального состояния (вариант A) ---
         self.status_banner = QFrame()
         self.status_banner.setObjectName("statusBanner")
         # Ключевые фиксы: фон из QSS рисуется только при WA_StyledBackground,
@@ -398,6 +547,24 @@ class SnapManager(QDialog):
 
         snap_menu.addSeparator()
 
+        # --- Подменю "Тема оформления" ---
+        theme_menu = snap_menu.addMenu("🎨 Тема оформления")
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+
+        self.act_theme_light = QAction("☀️ Светлая тема", self, checkable=True)
+        self.act_theme_light.setChecked(True)
+        self.act_theme_light.triggered.connect(lambda: self.apply_theme("light"))
+        theme_group.addAction(self.act_theme_light)
+        theme_menu.addAction(self.act_theme_light)
+
+        self.act_theme_dark = QAction("🌙 Тёмная тема", self, checkable=True)
+        self.act_theme_dark.triggered.connect(lambda: self.apply_theme("dark"))
+        theme_group.addAction(self.act_theme_dark)
+        theme_menu.addAction(self.act_theme_dark)
+
+        snap_menu.addSeparator()
+
         act_quit = QAction("Выход", self)
         act_quit.setShortcut(QKeySequence("Ctrl+Q"))
         act_quit.triggered.connect(self.reject)
@@ -420,6 +587,26 @@ class SnapManager(QDialog):
 
         # Дополнительные горячие клавиши (Return для применения)
         QShortcut(QKeySequence("Return"), self, activated=self.on_apply)
+
+    # --- Тема ---
+    def apply_theme(self, theme):
+        self.current_theme = theme
+        style = STYLE_DARK if theme == "dark" else STYLE_LIGHT
+        self.setStyleSheet(style)
+
+        # Переприменяем property-селекторы баннера после смены QSS
+        held_str = self.status_banner.property("held") or "false"
+        for w in (self.status_banner, self.global_label):
+            w.setProperty("held", held_str)
+            w.style().unpolish(w)
+            w.style().polish(w)
+            w.update()
+
+        # Статус-бар имеет inline-стиль — обновим его под тему
+        if theme == "dark":
+            self.status.setStyleSheet("font-size: 9pt; color: #8b9097;")
+        else:
+            self.status.setStyleSheet("font-size: 9pt; color: #777;")
 
     # --- Данные ---
     def _load_data(self):
@@ -455,7 +642,7 @@ class SnapManager(QDialog):
             w.update()
 
         # Переустановка stylesheet гарантирует пересчёт property-селекторов
-        self.setStyleSheet(STYLE)
+        self.setStyleSheet(STYLE_DARK if self.current_theme == "dark" else STYLE_LIGHT)
 
         self._rebuild_list()
         self._update_status()
