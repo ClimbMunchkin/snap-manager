@@ -69,9 +69,8 @@ def _ask_sudo_password_gui():
 
 def _relaunch_as_root(password):
     """
-    Перезапускает текущий скрипт через `sudo -S`, передавая пароль в stdin.
-    Возвращает объект Popen (уже с закрытым stdin) либо None, если перезапуск
-    не удался.
+    Запускает текущий скрипт через `sudo -S`.
+    Пароль передаётся позже через proc.communicate(input=...).
     """
     script = os.path.abspath(__file__)
     # -S читает пароль из stdin; -k сбрасывает кэш, чтобы гарантированно
@@ -92,14 +91,6 @@ def _relaunch_as_root(password):
             "Утилита sudo не найдена. Установите sudo или запускайте скрипт от root."
         )
         return None
-
-    # Отправляем пароль и закрываем stdin, чтобы sudo не ждал вечно
-    try:
-        proc.stdin.write(password + "\n")
-        proc.stdin.flush()
-        proc.stdin.close()
-    except BrokenPipeError:
-        pass
 
     return proc
 
@@ -133,8 +124,10 @@ def ensure_root_via_gui():
         if proc is None:
             sys.exit(1)
 
-        # Ждём завершения дочернего sudo-процесса и смотрим на код возврата.
-        _, stderr = proc.communicate()
+        # Передаём пароль в stdin и ждём завершения дочернего процесса.
+        # communicate() сам откроет, запишет и закроет stdin — никаких
+        # "I/O operation on closed file".
+        _, stderr = proc.communicate(input=password + "\n")
         rc = proc.returncode
 
         if rc == 0:
