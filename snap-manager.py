@@ -15,7 +15,8 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem, QPushButton, QMessageBox,
     QProgressDialog, QTextEdit, QComboBox, QAbstractItemView,
     QAction, QActionGroup, QFrame, QMenu, QWidget, QSizePolicy,
-    QShortcut, QMenuBar
+    QShortcut, QMenuBar,
+    QInputDialog, QLineEdit,
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
 from PyQt5.QtGui import QKeySequence, QColor, QBrush, QPalette
@@ -44,10 +45,117 @@ def run(cmd, check=False):
 
 
 def require_root():
+    """Вызывается уже ВНУТРИ root-процесса. Если мы не root — это баг."""
     if os.geteuid() != 0:
         app = QApplication.instance() or QApplication(sys.argv)
         QMessageBox.critical(None, "Ошибка", "Требуются права root. Запустите через sudo.")
         sys.exit(1)
+
+
+def _ask_sudo_password_gui():
+    """Показывает диалог ввода пароля. Возвращает строку или None (отмена)."""
+    app = QApplication.instance() or QApplication(sys.argv)
+    pwd, ok = QInputDialog.getText(
+        None,
+        "Требуются права администратора",
+        "Для управления Snap требуются права root.\n"
+        "Введите пароль администратора:",
+        QLineEdit.Password,
+    )
+    if not ok:
+        return None
+    return pwd
+
+
+def _relaunch_as_root(password):
+    """
+    Перезапускает текущий скрипт через `sudo -S`, передавая пароль в stdin.
+    Возвращает объект Popen (уже с закрытым stdin) либо None, если перезапуск
+    не удался.
+    """
+    script = os.path.abspath(__file__)
+    # -S читает пароль из stdin; -k сбрасывает кэш, чтобы гарантированно
+    # использовать только что введённый пароль; -p "" убирает приглашение.
+    cmd = ["sudo", "-S", "-k", "-p", "", sys.executable, script, *sys.argv[1:]]
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,   # не смешиваем с GUI
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except FileNotFoundError:
+        QMessageBox.critical(
+            None, "Ошибка",
+            "Утилита sudo не найдена. Установите sudo или запускайте скрипт от root."
+        )
+        return None
+
+    # Отправляем пароль и закрываем stdin, чтобы sudo не ждал вечно
+    try:
+        proc.stdin.write(password + "\n")
+        proc.stdin.flush()
+        proc.stdin.close()
+    except BrokenPipeError:
+        pass
+
+    return proc
+
+
+def ensure_root_via_gui():
+    """
+    Главная точка входа для обычного пользователя.
+    - Если уже root — ничего не делает.
+    - Иначе спрашивает пароль и перезапускает себя под sudo.
+    - При успехе/неудаче корректно завершает родительский процесс.
+    """
+    if os.geteuid() == 0:
+        return
+
+    # Обязательно создаём QApplication ДО диалога,
+    # иначе QInputDialog упадёт.
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    while True:
+        password = _ask_sudo_password_gui()
+        if password is None:
+            # пользователь нажал "Отмена"
+            sys.exit(0)
+
+        if not password:
+            QMessageBox.warning(None, "Пароль не введён",
+                                "Пароль не может быть пустым.")
+            continue
+
+        proc = _relaunch_as_root(password)
+        if proc is None:
+            sys.exit(1)
+
+        # Ждём завершения дочернего sudo-процесса и смотрим на код возврата.
+        _, stderr = proc.communicate()
+        rc = proc.returncode
+
+        if rc == 0:
+            # Дочерний процесс успешно отработал — завершаемся как родитель.
+            sys.exit(0)
+
+        # Скорее всего неверный пароль (sudo вернёт 1).
+        msg = (stderr or "").strip()
+        if "incorrect password" in msg.lower() or "неверный пароль" in msg.lower():
+            hint = "Неверный пароль. Попробуйте ещё раз."
+        elif "not in the sudoers" in msg.lower():
+            hint = "Пользователь отсутствует в sudoers и не может получить root."
+        else:
+            hint = "Не удалось получить права root.\n\n" + (msg[-400:] if msg else "")
+
+        QMessageBox.warning(None, "Аутентификация не удалась", hint)
+
+        # Если в sudoers вообще нет — дальше пытаться бессмысленно.
+        if "not in the sudoers" in msg.lower():
+            sys.exit(1)
+        # Иначе цикл — даём ввести пароль снова.
 
 
 def get_snapd_version():
@@ -790,7 +898,6 @@ class SnapManager(QDialog):
             w.style().polish(w)
             w.update()
 
-        
         self._rebuild_list()
         self._update_status()
 
@@ -1017,7 +1124,9 @@ class SnapManager(QDialog):
 
 # ---------- main ----------
 def main():
-    require_root()
+    ensure_root_via_gui()   # <-- спросит пароль и перезапустит под sudo
+    require_root()          # страховка: мы точно root
+
     cleanup_old_logs()
 
     snapd_ver = get_snapd_version()
